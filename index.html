@@ -687,9 +687,16 @@
     };
 
     // --- SUPABASE CLIENT INITIALIZATION ---
-    let supabase = null;
-    if (typeof SUPABASE_URL !== 'undefined' && SUPABASE_URL && typeof SUPABASE_ANON_KEY !== 'undefined' && SUPABASE_ANON_KEY) {
-      supabase = window.supabase ? window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY) : null;
+    let supabaseClient = null;
+    try {
+      if (typeof SUPABASE_URL !== 'undefined' && SUPABASE_URL && typeof SUPABASE_ANON_KEY !== 'undefined' && SUPABASE_ANON_KEY) {
+        const clientFactory = window.supabase ? window.supabase.createClient : (typeof createClient === 'function' ? createClient : null);
+        if (clientFactory) {
+          supabaseClient = clientFactory(SUPABASE_URL, SUPABASE_ANON_KEY);
+        }
+      }
+    } catch (e) {
+      console.error("Erro ao inicializar Supabase client:", e);
     }
 
     // Cache local de sincronização (Preenchido via Supabase)
@@ -703,15 +710,24 @@
 
     // Sincroniza tabelas do Supabase para memória
     async function syncFromSupabase() {
-      if (!supabase) return;
+      if (!supabaseClient) {
+        console.warn("Supabase não inicializado. Verifique suas credenciais em config.js.");
+        return;
+      }
       try {
         const [rUsers, rCompanies, rCards, rUserCards, rHistory] = await Promise.all([
-          supabase.from('users').select('*'),
-          supabase.from('companies').select('*'),
-          supabase.from('cards').select('*'),
-          supabase.from('user_cards').select('*'),
-          supabase.from('points_history').select('*')
+          supabaseClient.from('users').select('*'),
+          supabaseClient.from('companies').select('*'),
+          supabaseClient.from('cards').select('*'),
+          supabaseClient.from('user_cards').select('*'),
+          supabaseClient.from('points_history').select('*')
         ]);
+
+        if (rUsers.error) console.error("Erro na consulta users:", rUsers.error);
+        if (rCompanies.error) console.error("Erro na consulta companies:", rCompanies.error);
+        if (rCards.error) console.error("Erro na consulta cards:", rCards.error);
+        if (rUserCards.error) console.error("Erro na consulta user_cards:", rUserCards.error);
+        if (rHistory.error) console.error("Erro na consulta points_history:", rHistory.error);
 
         dbCache.users = (rUsers.data || []).map(u => ({
           id: u.id, nome: u.nome, email: u.email, password: u.password, tipo: u.tipo, telefone: u.telefone
@@ -906,7 +922,7 @@
       const tipo = document.querySelector('input[name="register-role"]:checked').value;
       const nomeEmpresa = document.getElementById("register-company").value.trim();
 
-      if (!supabase) {
+      if (!supabaseClient) {
         alert("Supabase não configurado.");
         return;
       }
@@ -924,7 +940,7 @@
       }
 
       const newUserId = "u-" + Date.now();
-      const { error: userErr } = await supabase.from('users').insert([{
+      const { error: userErr } = await supabaseClient.from('users').insert([{
         id: newUserId,
         nome,
         email,
@@ -944,7 +960,7 @@
         const slug = companyName.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9]+/g, "-").replace(/(^-|-$)+/g, "") || `empresa-${Date.now()}`;
         const compId = "c-" + Date.now();
 
-        const { error: compErr } = await supabase.from('companies').insert([{
+        const { error: compErr } = await supabaseClient.from('companies').insert([{
           id: compId,
           nome: companyName,
           slug,
@@ -954,7 +970,7 @@
 
         if (compErr) console.error(compErr);
 
-        const { error: cardErr } = await supabase.from('cards').insert([{
+        const { error: cardErr } = await supabaseClient.from('cards').insert([{
           id: "card-" + Date.now(),
           empresa_id: compId,
           total_pontos: 10,
@@ -1180,10 +1196,20 @@
                 <div id="history-box-${uc.id}" onclick="event.stopPropagation()" class="hidden mt-2 max-h-32 overflow-y-auto space-y-1.5 bg-black/15 p-2.5 rounded-xl text-[10px] border border-white/5 font-medium">
                   <!-- Loaded Dynamically -->
                 </div>
-              </div>    async function clientTriggerRedeem(userCardId) {
+              </div>
+
+            </div>
+
+          </div>
+        `;
+        walletCards.appendChild(cardEl);
+      });
+    }
+
+    async function clientTriggerRedeem(userCardId) {
       if (!confirm("Deseja solicitar o resgate desta recompensa agora?")) return;
 
-      if (!supabase) return;
+      if (!supabaseClient) return;
 
       document.getElementById("view-loading").classList.remove("hidden");
       await syncFromSupabase();
@@ -1197,7 +1223,7 @@
         const totalP = uc.totalPontosSnapshot || (card ? card.totalPontos : 10);
 
         // Update userCard
-        const { error: ucErr } = await supabase.from('user_cards').update({
+        const { error: ucErr } = await supabaseClient.from('user_cards').update({
           pontos_atuais: 0,
           status: "ATIVO",
           total_pontos_snapshot: card ? card.totalPontos : totalP,
@@ -1211,7 +1237,7 @@
         }
 
         // Add history log
-        const { error: histErr } = await supabase.from('points_history').insert([{
+        const { error: histErr } = await supabaseClient.from('points_history').insert([{
           id: "h-" + Date.now(),
           user_card_id: userCardId,
           pontos: totalP,
@@ -1239,7 +1265,7 @@
     async function handleSaveClientProfile(e) {
       e.preventDefault();
       const user = getSession();
-      if (!user || !supabase) return;
+      if (!user || !supabaseClient) return;
 
       const newNome = document.getElementById("wallet-profile-nome").value.trim();
       const newPhone = document.getElementById("wallet-profile-phone").value.trim();
@@ -1251,7 +1277,7 @@
 
       document.getElementById("view-loading").classList.remove("hidden");
 
-      const { error } = await supabase.from('users').update({
+      const { error } = await supabaseClient.from('users').update({
         nome: newNome,
         telefone: newPhone
       }).eq('id', user.id);
@@ -1603,120 +1629,168 @@
       });
     }
 
-    function handleAdminLaunchPoints(e) {
+    async function handleAdminLaunchPoints(e) {
       e.preventDefault();
       const email = document.getElementById("launch-email").value.trim().toLowerCase();
       const pontos = parseInt(document.getElementById("launch-pontos").value, 10);
       const descInput = document.getElementById("launch-descricao").value.trim();
       const descricao = descInput || "Venda no estabelecimento";
 
-      if (!email) return;
+      if (!email || !supabaseClient) return;
+
+      document.getElementById("view-loading").classList.remove("hidden");
+      await syncFromSupabase();
 
       const user = getSession();
       const companies = getData(DB_KEYS.companies);
       const company = companies.find(c => c.usuarioId === user.id);
-      if (!company) return;
+      if (!company) { document.getElementById("view-loading").classList.add("hidden"); return; }
 
       const cards = getData(DB_KEYS.cards);
       const card = cards.find(c => c.empresaId === company.id);
-      if (!card) return;
+      if (!card) { document.getElementById("view-loading").classList.add("hidden"); return; }
 
       const users = getData(DB_KEYS.users);
-      let clientUser = users.find(u => u.email === email && u.tipo === "CLIENTE");
+      let clientUser = users.find(u => u.email.toLowerCase() === email && u.tipo === "CLIENTE");
 
-      // Se o usuário não existir, cria um cadastro rápido para ele
+      // Auto-register client if not registered
       if (!clientUser) {
+        document.getElementById("view-loading").classList.add("hidden");
         const confirmCreate = confirm(`O cliente com e-mail "${email}" não possui cadastro. Deseja cadastrá-lo automaticamente no sistema para pontuar?`);
         if (!confirmCreate) return;
 
+        document.getElementById("view-loading").classList.remove("hidden");
         const newUserId = "u-" + Date.now();
         const nomeCliente = email.split('@')[0];
-        clientUser = {
+        const formattedNome = nomeCliente.charAt(0).toUpperCase() + nomeCliente.slice(1);
+
+        const { error: regErr } = await supabaseClient.from('users').insert([{
           id: newUserId,
-          nome: nomeCliente.charAt(0).toUpperCase() + nomeCliente.slice(1),
+          nome: formattedNome,
           email: email,
-          password: "123", // senha provisória
+          password: "123",
           tipo: "CLIENTE",
           telefone: ""
-        };
-        users.push(clientUser);
-        saveData(DB_KEYS.users, users);
+        }]);
+
+        if (regErr) {
+          document.getElementById("view-loading").classList.add("hidden");
+          alert("Erro ao cadastrar cliente: " + regErr.message);
+          return;
+        }
+
+        await syncFromSupabase();
+        clientUser = dbCache.users.find(u => u.id === newUserId);
       }
 
-      // Vincula e lança os pontos
+      // Find or create userCard
       const userCards = getData(DB_KEYS.userCards);
       let uc = userCards.find(item => item.usuarioId === clientUser.id && item.cardId === card.id);
 
       if (!uc) {
-        uc = {
-          id: "uc-" + Date.now(),
-          usuarioId: clientUser.id,
-          cardId: card.id,
-          pontosAtuais: 0,
-          status: "ATIVO"
-        };
-        userCards.push(uc);
+        const newUcId = "uc-" + Date.now();
+        const { error: ucInsErr } = await supabaseClient.from('user_cards').insert([{
+          id: newUcId,
+          usuario_id: clientUser.id,
+          card_id: card.id,
+          pontos_atuais: 0,
+          status: "ATIVO",
+          total_pontos_snapshot: card.totalPontos,
+          recompensa_snapshot: card.recompensa
+        }]);
+
+        if (ucInsErr) {
+          document.getElementById("view-loading").classList.add("hidden");
+          alert("Erro ao vincular cartão: " + ucInsErr.message);
+          return;
+        }
+
+        await syncFromSupabase();
+        uc = dbCache.userCards.find(item => item.id === newUcId);
       }
 
+      const totalP = uc.totalPontosSnapshot || card.totalPontos;
       let novosPontos = uc.pontosAtuais + pontos;
       let status = "ATIVO";
 
-      if (novosPontos >= card.totalPontos) {
-        novosPontos = card.totalPontos;
+      if (novosPontos >= totalP) {
+        novosPontos = totalP;
         status = "COMPLETO";
       }
 
-      const ucIndex = userCards.findIndex(item => item.id === uc.id);
-      userCards[ucIndex].pontosAtuais = novosPontos;
-      userCards[ucIndex].status = status;
-      saveData(DB_KEYS.userCards, userCards);
+      // Update userCard points and status
+      const { error: ucUpdErr } = await supabaseClient.from('user_cards').update({
+        pontos_atuais: novosPontos,
+        status: status
+      }).eq('id', uc.id);
 
-      // Salva no histórico de transações
-      const history = getData(DB_KEYS.history);
-      history.push({
+      if (ucUpdErr) console.error(ucUpdErr);
+
+      // Log history
+      await supabaseClient.from('points_history').insert([{
         id: "h-" + Date.now(),
-        userCardId: userCards[ucIndex].id,
+        user_card_id: uc.id,
         pontos: pontos,
         descricao: descricao,
         data: new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR", {hour: '2-digit', minute:'2-digit'}),
         tipo: "CREDITO"
-      });
-      saveData(DB_KEYS.history, history);
+      }]);
 
-      showNotification(`Pontos lançados! ${clientUser.nome} agora tem ${novosPontos}/${card.totalPontos} pontos.`);
+      await syncFromSupabase();
+      document.getElementById("view-loading").classList.add("hidden");
+
+      showNotification(`Pontos lançados! ${clientUser.nome} agora tem ${novosPontos}/${totalP} pontos.`);
       document.getElementById("launch-email").value = "";
       document.getElementById("launch-pontos").value = "1";
       document.getElementById("launch-descricao").value = "";
       renderDashboard();
     }
 
-    function handleSaveCardConfig(e) {
+    async function handleSaveCardConfig(e) {
       e.preventDefault();
       const user = getSession();
+      if (!user || !supabaseClient) return;
+
       const company = getData(DB_KEYS.companies).find(c => c.usuarioId === user.id);
       if (!company) return;
 
       const totalPontos = parseInt(document.getElementById("config-total-pontos").value, 10);
-      const recompensa = document.getElementById("config-recompensa").value;
+      const recompensa = document.getElementById("config-recompensa").value.trim();
 
       const cards = getData(DB_KEYS.cards);
-      const cardIndex = cards.findIndex(c => c.empresaId === company.id);
+      const card = cards.find(c => c.empresaId === company.id);
 
-      if (cardIndex !== -1) {
-        cards[cardIndex].totalPontos = totalPontos;
-        cards[cardIndex].recompensa = recompensa;
-        saveData(DB_KEYS.cards, cards);
-        showNotification("Configuração do cartão atualizada com sucesso!");
-        renderDashboard();
+      document.getElementById("view-loading").classList.remove("hidden");
+
+      if (card) {
+        const { error } = await supabaseClient.from('cards').update({
+          total_pontos: totalPontos,
+          recompensa: recompensa
+        }).eq('id', card.id);
+
+        if (error) alert("Erro ao atualizar cartão: " + error.message);
+      } else {
+        await supabaseClient.from('cards').insert([{
+          id: "card-" + Date.now(),
+          empresa_id: company.id,
+          total_pontos: totalPontos,
+          recompensa: recompensa
+        }]);
       }
+
+      await syncFromSupabase();
+      document.getElementById("view-loading").classList.add("hidden");
+      showNotification("Configuração do cartão atualizada com sucesso!");
+      renderDashboard();
     }
 
-    function handleSaveCompanyProfile(e) {
+    async function handleSaveCompanyProfile(e) {
       e.preventDefault();
       const user = getSession();
-      const companies = getData(DB_KEYS.companies);
-      const companyIndex = companies.findIndex(c => c.usuarioId === user.id);
-      if (companyIndex === -1) return;
+      if (!user || !supabaseClient) return;
+
+      const company = getData(DB_KEYS.companies).find(c => c.usuarioId === user.id);
+      if (!company) return;
 
       const newNome = document.getElementById("config-company-name").value.trim();
       const newSlug = document.getElementById("config-company-slug").value.trim().toLowerCase().replace(/[^a-z0-9]+/g, "-");
@@ -1730,28 +1804,31 @@
         return;
       }
 
-      // Validar slug único
-      const existing = companies.find((c, idx) => c.slug === newSlug && idx !== companyIndex);
-      if (existing) {
-        alert("Este Slug da URL já está em uso por outro estabelecimento!");
+      document.getElementById("view-loading").classList.remove("hidden");
+
+      const { error: compErr } = await supabaseClient.from('companies').update({
+        nome: newNome,
+        slug: newSlug,
+        logo: newLogo,
+        color: newColor,
+        categoria: newCategory
+      }).eq('id', company.id);
+
+      if (compErr) {
+        document.getElementById("view-loading").classList.add("hidden");
+        alert("Erro ao salvar empresa: " + compErr.message);
         return;
       }
 
-      companies[companyIndex].nome = newNome;
-      companies[companyIndex].slug = newSlug;
-      companies[companyIndex].logo = newLogo;
-      companies[companyIndex].color = newColor;
-      companies[companyIndex].categoria = newCategory;
-      saveData(DB_KEYS.companies, companies);
-
-      const users = getData(DB_KEYS.users);
-      const userIndex = users.findIndex(u => u.id === user.id);
-      if (userIndex !== -1) {
-        users[userIndex].telefone = newPhone;
-        saveData(DB_KEYS.users, users);
-        setSession(users[userIndex]);
+      if (newPhone) {
+        await supabaseClient.from('users').update({ telefone: newPhone }).eq('id', user.id);
       }
 
+      await syncFromSupabase();
+      const updatedUser = dbCache.users.find(u => u.id === user.id);
+      if (updatedUser) setSession(updatedUser);
+
+      document.getElementById("view-loading").classList.add("hidden");
       showNotification("Perfil da loja atualizado com sucesso!");
       renderDashboard();
     }
@@ -1785,23 +1862,27 @@
       document.getElementById("modal-add-point").classList.add("hidden");
     }
 
-    function submitAddPointModal(e) {
+    async function submitAddPointModal(e) {
       e.preventDefault();
       const userCardId = document.getElementById("modal-uc-id").value;
       const dataVenda = document.getElementById("modal-date").value;
       const pontos = parseInt(document.getElementById("modal-points").value, 10);
       const descricao = document.getElementById("modal-description").value.trim() || "Venda no estabelecimento";
 
+      if (!userCardId || !supabaseClient) return;
+
+      document.getElementById("view-loading").classList.remove("hidden");
+      await syncFromSupabase();
+
       const userCards = getData(DB_KEYS.userCards);
-      const ucIndex = userCards.findIndex(uc => uc.id === userCardId);
-      if (ucIndex === -1) return;
+      const uc = userCards.find(item => item.id === userCardId);
+      if (!uc) { document.getElementById("view-loading").classList.add("hidden"); return; }
 
       const cards = getData(DB_KEYS.cards);
-      const card = cards.find(c => c.id === userCards[ucIndex].cardId);
-      if (!card) return;
+      const card = cards.find(c => c.id === uc.cardId);
 
-      const totalP = userCards[ucIndex].totalPontosSnapshot || card.totalPontos;
-      let novosPontos = userCards[ucIndex].pontosAtuais + pontos;
+      const totalP = uc.totalPontosSnapshot || (card ? card.totalPontos : 10);
+      let novosPontos = uc.pontosAtuais + pontos;
       let status = "ATIVO";
 
       if (novosPontos >= totalP) {
@@ -1809,25 +1890,27 @@
         status = "COMPLETO";
       }
 
-      userCards[ucIndex].pontosAtuais = novosPontos;
-      userCards[ucIndex].status = status;
-      saveData(DB_KEYS.userCards, userCards);
+      const { error: ucErr } = await supabaseClient.from('user_cards').update({
+        pontos_atuais: novosPontos,
+        status: status
+      }).eq('id', userCardId);
 
-      // Formatar data de YYYY-MM-DD para DD/MM/YYYY
+      if (ucErr) console.error(ucErr);
+
       const dateParts = dataVenda.split('-');
       const formattedDate = dateParts.length === 3 ? `${dateParts[2]}/${dateParts[1]}/${dateParts[0]}` : dataVenda;
 
-      // Salva no histórico
-      const history = getData(DB_KEYS.history);
-      history.push({
+      await supabaseClient.from('points_history').insert([{
         id: "h-" + Date.now(),
-        userCardId: userCardId,
+        user_card_id: userCardId,
         pontos: pontos,
         descricao: descricao,
         data: formattedDate,
         tipo: "CREDITO"
-      });
-      saveData(DB_KEYS.history, history);
+      }]);
+
+      await syncFromSupabase();
+      document.getElementById("view-loading").classList.add("hidden");
 
       closeAddPointModal();
       showNotification(status === "COMPLETO" ? "Pontuação completa! Recompensa liberada." : "Pontos adicionados com sucesso.");
@@ -1881,36 +1964,41 @@
       document.getElementById("modal-customer-history").classList.add("hidden");
     }
 
-    function adminConfirmRedeem(userCardId) {
+    async function adminConfirmRedeem(userCardId) {
       if (!confirm("Deseja registrar o resgate e zerar o cartão deste cliente?")) return;
+      if (!supabaseClient) return;
+
+      document.getElementById("view-loading").classList.remove("hidden");
+      await syncFromSupabase();
 
       const userCards = getData(DB_KEYS.userCards);
-      const ucIndex = userCards.findIndex(uc => uc.id === userCardId);
-      if (ucIndex === -1) return;
+      const uc = userCards.find(item => item.id === userCardId);
+      if (!uc) { document.getElementById("view-loading").classList.add("hidden"); return; }
 
       const cards = getData(DB_KEYS.cards);
-      const card = cards.find(c => c.id === userCards[ucIndex].cardId);
-      const totalP = userCards[ucIndex].totalPontosSnapshot || (card ? card.totalPontos : 10);
+      const card = cards.find(c => c.id === uc.cardId);
+      const totalP = uc.totalPontosSnapshot || (card ? card.totalPontos : 10);
 
-      userCards[ucIndex].pontosAtuais = 0;
-      userCards[ucIndex].status = "ATIVO";
-      if (card) {
-        userCards[ucIndex].totalPontosSnapshot = card.totalPontos;
-        userCards[ucIndex].recompensaSnapshot = card.recompensa;
-      }
-      saveData(DB_KEYS.userCards, userCards);
+      const { error: ucErr } = await supabaseClient.from('user_cards').update({
+        pontos_atuais: 0,
+        status: "ATIVO",
+        total_pontos_snapshot: card ? card.totalPontos : totalP,
+        recompensa_snapshot: card ? card.recompensa : uc.recompensaSnapshot
+      }).eq('id', userCardId);
 
-      // Salva no histórico
-      const history = getData(DB_KEYS.history);
-      history.push({
+      if (ucErr) console.error(ucErr);
+
+      await supabaseClient.from('points_history').insert([{
         id: "h-" + Date.now(),
-        userCardId: userCardId,
+        user_card_id: userCardId,
         pontos: totalP,
         descricao: "Resgate de Prêmio (Confirmado pelo Lojista)",
         data: new Date().toLocaleDateString("pt-BR") + " " + new Date().toLocaleTimeString("pt-BR", {hour: '2-digit', minute:'2-digit'}),
         tipo: "RESGATADO"
-      });
-      saveData(DB_KEYS.history, history);
+      }]);
+
+      await syncFromSupabase();
+      document.getElementById("view-loading").classList.add("hidden");
 
       showNotification("Prêmio entregue! O cartão foi reiniciado para o cliente.");
       renderDashboard();
@@ -2021,7 +2109,7 @@
     }
 
     async function joinLoyaltyProgram(userId, cardId, slug) {
-      if (!supabase) return;
+      if (!supabaseClient) return;
 
       document.getElementById("view-loading").classList.remove("hidden");
       await syncFromSupabase();
@@ -2043,7 +2131,7 @@
         recompensa_snapshot: card.recompensa
       };
 
-      const { error } = await supabase.from('user_cards').insert([newRelation]);
+      const { error } = await supabaseClient.from('user_cards').insert([newRelation]);
       if (error) {
         document.getElementById("view-loading").classList.add("hidden");
         alert("Erro ao entrar no programa: " + error.message);
@@ -2073,17 +2161,26 @@
       }
     });
 
-    // Run seeding and startup routing
-    seedDatabase();
-    updateHeader();
+    // Startup routing and sync
+    (async function initApp() {
+      document.getElementById("view-loading").classList.remove("hidden");
+      try {
+        await syncFromSupabase();
+      } catch (err) {
+        console.error("Erro na inicialização:", err);
+      } finally {
+        document.getElementById("view-loading").classList.add("hidden");
+      }
 
-    // Trigger initial page load
-    const initialHash = window.location.hash;
-    if (initialHash && initialHash.startsWith("#store/")) {
-      navigateTo(initialHash.substring(1));
-    } else {
-      navigateTo("home");
-    }
+      updateHeader();
+
+      const initialHash = window.location.hash;
+      if (initialHash && initialHash.startsWith("#store/")) {
+        navigateTo(initialHash.substring(1));
+      } else {
+        navigateTo("home");
+      }
+    })();
   </script>
 </body>
 </html>
